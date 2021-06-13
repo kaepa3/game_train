@@ -1,30 +1,101 @@
 package main
 
 import (
+	_ "image/png"
+
+	"bytes"
 	"fmt"
+	"image"
 	"image/color"
+	_ "image/png"
 	"log"
 	"math/rand"
 
+	"golang.org/x/image/font"
+	"golang.org/x/image/font/opentype"
+
 	"github.com/hajimehoshi/ebiten/v2"
+	"github.com/hajimehoshi/ebiten/v2/examples/resources/fonts"
+	resources "github.com/hajimehoshi/ebiten/v2/examples/resources/images/flappy"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
 	"github.com/hajimehoshi/ebiten/v2/text"
-	"golang.org/x/image/font"
 )
+
+func floorDiv(x, y int) int {
+	d := x / y
+	if d*y == x || x >= 0 {
+		return d
+	}
+	return d - 1
+}
+
+func floorMod(x, y int) int {
+	return x - floorDiv(x, y)*y
+}
 
 const (
 	screenWidth   = 640
 	screenHeight  = 640
-	titleSize     = 32
+	tileSize      = 32
 	titleFontSize = fontSize * 1.5
 	fontSize      = 24
 	smallFontSize = fontSize / 2
 )
 
 var (
+	gopherImage     *ebiten.Image
+	tilesImage      *ebiten.Image
 	titleArcadeFont font.Face
 	arcadeFont      font.Face
+	smallArcadeFont font.Face
 )
+
+func init() {
+	fmt.Println("init-1")
+	img, _, err := image.Decode(bytes.NewReader(resources.Gopher_png))
+	if err != nil {
+		log.Fatal(err)
+	}
+	gopherImage = ebiten.NewImageFromImage(img)
+
+	img, _, err = image.Decode(bytes.NewReader(resources.Tiles_png))
+	if err != nil {
+		log.Fatal(err)
+	}
+	tilesImage = ebiten.NewImageFromImage(img)
+}
+func init() {
+	fmt.Println("init-2")
+	tt, err := opentype.Parse(fonts.PressStart2P_ttf)
+	if err != nil {
+		log.Fatal(err)
+	}
+	const dpi = 72
+	titleArcadeFont, err = opentype.NewFace(tt, &opentype.FaceOptions{
+		Size:    titleFontSize,
+		DPI:     dpi,
+		Hinting: font.HintingFull,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	arcadeFont, err = opentype.NewFace(tt, &opentype.FaceOptions{
+		Size:    fontSize,
+		DPI:     dpi,
+		Hinting: font.HintingFull,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	smallArcadeFont, err = opentype.NewFace(tt, &opentype.FaceOptions{
+		Size:    smallFontSize,
+		DPI:     dpi,
+		Hinting: font.HintingFull,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+}
 
 type Mode int
 
@@ -97,7 +168,6 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		titleTexts = []string{"FLappy"}
 		texts = []string{"", "", "", "", "", "", "", "Press any key", "", "or touch screen"}
 	}
-	fmt.Println(screen)
 	for i, l := range titleTexts {
 		x := (screenWidth - len(l)*titleFontSize) / 2
 		text.Draw(screen, l, titleArcadeFont, x, (i+4)*titleFontSize, color.White)
@@ -110,6 +180,20 @@ func (g *Game) Draw(screen *ebiten.Image) {
 }
 
 func (g *Game) drawTiles(screen *ebiten.Image) {
+	const (
+		nx           = screenWidth / tileSize
+		ny           = screenHeight / tileSize
+		pipeTileSrcX = 128
+		pipeTileSrcY = 192
+	)
+	op := &ebiten.DrawImageOptions{}
+	for i := -2; i < nx+1; i++ {
+		op.GeoM.Reset()
+		op.GeoM.Translate(float64(i*tileSize-floorMod(g.cameraX, tileSize)),
+			float64((ny-1)*tileSize-floorMod(g.cameraY, tileSize)))
+		screen.DrawImage(tilesImage.SubImage(image.Rect(0, 0, tileSize, tileSize)).(*ebiten.Image), op)
+
+	}
 
 }
 
