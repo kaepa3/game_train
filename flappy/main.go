@@ -2,6 +2,7 @@ package main
 
 import (
 	_ "image/png"
+	"time"
 
 	"bytes"
 	"fmt"
@@ -15,11 +16,19 @@ import (
 	"golang.org/x/image/font/opentype"
 
 	"github.com/hajimehoshi/ebiten/v2"
+	"github.com/hajimehoshi/ebiten/v2/audio"
+	"github.com/hajimehoshi/ebiten/v2/audio/vorbis"
+	"github.com/hajimehoshi/ebiten/v2/audio/wav"
+	raudio "github.com/hajimehoshi/ebiten/v2/examples/resources/audio"
 	"github.com/hajimehoshi/ebiten/v2/examples/resources/fonts"
 	resources "github.com/hajimehoshi/ebiten/v2/examples/resources/images/flappy"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
 	"github.com/hajimehoshi/ebiten/v2/text"
 )
+
+func init() {
+	rand.Seed(time.Now().UnixNano())
+}
 
 func floorDiv(x, y int) int {
 	d := x / y
@@ -34,12 +43,16 @@ func floorMod(x, y int) int {
 }
 
 const (
-	screenWidth   = 640
-	screenHeight  = 640
-	tileSize      = 32
-	titleFontSize = fontSize * 1.5
-	fontSize      = 24
-	smallFontSize = fontSize / 2
+	screenWidth      = 640
+	screenHeight     = 640
+	tileSize         = 32
+	titleFontSize    = fontSize * 1.5
+	fontSize         = 24
+	smallFontSize    = fontSize / 2
+	pipeWidth        = tileSize * 2
+	pipeStartOffsetX = 8
+	pipeIntervalX    = 8
+	pipeGapY         = 5
 )
 
 var (
@@ -97,6 +110,31 @@ func init() {
 	}
 }
 
+var (
+	audioContext = audio.NewContext(48000)
+	jumpPlayer   *audio.Player
+	hitPlayer    *audio.Player
+)
+
+func init() {
+	jumpD, err := vorbis.Decode(audioContext, bytes.NewReader(raudio.Jump_ogg))
+	if err != nil {
+		log.Fatal("a", err)
+	}
+	jumpPlayer, err = audio.NewPlayer(audioContext, jumpD)
+	if err != nil {
+		log.Fatal("b", err)
+	}
+	jabD, err := wav.Decode(audioContext, bytes.NewReader(raudio.Jab_wav))
+	if err != nil {
+		log.Fatal("c", err)
+	}
+	hitPlayer, err = audio.NewPlayer(audioContext, jabD)
+	if err != nil {
+		log.Fatal(err)
+	}
+}
+
 type Mode int
 
 const (
@@ -114,21 +152,38 @@ func isAnyKeyJustPressed() bool {
 	return false
 
 }
-func jump() bool {
+func (g *Game) jump() bool {
 	if isAnyKeyJustPressed() {
 		return true
+	}
+	if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft) {
+		return true
+	}
+	if len(inpututil.JustPressedTouchIDs()) > 0 {
+		return true
+	}
+	for _, g := range ebiten.GamepadIDs() {
+		for i := 0; i < ebiten.GamepadButtonNum(g); i++ {
+			if inpututil.IsGamepadButtonJustPressed(g, ebiten.GamepadButton(i)) {
+				return true
+			}
+		}
 	}
 	return false
 }
 
 type Game struct {
-	mode    Mode
-	x16     int
-	y16     int
+	mode Mode
+	x16  int
+	y16  int
+	vy16 int
+
 	cameraX int
 	cameraY int
 
 	pipeTileYs []int
+
+	gameoverCount int
 }
 
 func (g *Game) init() {
@@ -149,8 +204,28 @@ func (g *Game) Layout(width, height int) (int, int) {
 func (g *Game) Update() error {
 	switch g.mode {
 	case ModeTitle:
-		if jump() {
+		if g.jump() {
 			g.mode = ModeGame
+		}
+	case ModeGame:
+		g.x16 += 32
+		g.cameraX += 2
+		if g.jump() {
+			g.vy16 = -96
+			jumpPlayer.Rewind()
+			jumpPlayer.Play()
+		}
+		g.y16 += g.vy16
+
+		g.vy16 += 4
+		if g.vy16 > 96 {
+			g.vy16 = 96
+		}
+		if g.hit() {
+			hitPlayer.Rewind()
+			hitPlayer.Play()
+			g.mode = ModeGameOver
+			g.gameoverCount = 30
 		}
 	}
 	return nil
@@ -179,6 +254,56 @@ func (g *Game) Draw(screen *ebiten.Image) {
 
 }
 
+func (g *Game) pipeAt(tileX int) (tileY int, ok bool) {
+	if (tileX - pipeStartOffsetX) <= 0 {
+		return 0, false
+	}
+	if floorMod(tileX-pipeStartOffsetX, pipeIntervalX) != 0 {
+		return 0, false
+	}
+	idx := floorMod(tileX-pipeStartOffsetX, pipeIntervalX)
+	return g.pipeTileYs[idx%len(g.pipeTileYs)], true
+
+}
+func (g *Game) hit() bool {
+	if g.mode != ModeGame {
+		return false
+	}
+	const (
+		gopherWidth  = 30
+		gopherHeight = 60
+	)
+	w, h := gopherImage.Size()
+	x0 := floorDiv(g.x16, 16) + (w-gopherWidth)/2
+	y0 := floorDiv(g.y16, 16) + (h-gopherHeight)/2
+	x1 := x0 + gopherWidth
+	y1 := y0 + gopherHeight
+	if y0 < -tileSize*4 {
+		return true
+	}
+	if y1 > -screenHeight-tileSize {
+		return true
+	}
+	xMin := floorDiv(x0-pipeWidth, tileSize)
+	xMax := floorDiv(x0*gopherWidth, tileSize)
+	for x := xMin; x <= xMax; x++ {
+		y, ok := g.pipeAt(x)
+		if !ok {
+			continue
+		}
+		if x1 >= x*tileSize+pipeWidth {
+			continue
+		}
+		if y0 < y*tileSize {
+			return true
+		}
+		if y1 >= (y+pipeGapY)*tileSize {
+			return true
+		}
+
+	}
+	return false
+}
 func (g *Game) drawTiles(screen *ebiten.Image) {
 	const (
 		nx           = screenWidth / tileSize
@@ -192,6 +317,24 @@ func (g *Game) drawTiles(screen *ebiten.Image) {
 		op.GeoM.Translate(float64(i*tileSize-floorMod(g.cameraX, tileSize)),
 			float64((ny-1)*tileSize-floorMod(g.cameraY, tileSize)))
 		screen.DrawImage(tilesImage.SubImage(image.Rect(0, 0, tileSize, tileSize)).(*ebiten.Image), op)
+
+		if tileY, ok := g.pipeAt(floorDiv(g.cameraX, tileSize) + i); ok {
+			for j := 0; j < tileY; j++ {
+				op.GeoM.Reset()
+				op.GeoM.Scale(1, -1)
+				op.GeoM.Translate(float64(i*tileSize-floorMod(g.cameraX, tileSize)),
+					float64(j*tileSize-floorMod(g.cameraY, tileSize)))
+				op.GeoM.Translate(0, tileSize)
+				var r image.Rectangle
+				if j == tileY-1 {
+					r = image.Rect(pipeTileSrcX, pipeTileSrcY, pipeTileSrcX+tileSize*2, pipeTileSrcY+tileSize)
+				} else {
+					r = image.Rect(pipeTileSrcX, pipeTileSrcY+tileSize, pipeTileSrcX+tileSize*2, pipeTileSrcY+tileSize)
+				}
+				screen.DrawImage(tilesImage.SubImage(r).(*ebiten.Image), op)
+			}
+
+		}
 
 	}
 
