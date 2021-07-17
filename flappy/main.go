@@ -2,6 +2,7 @@ package main
 
 import (
 	_ "image/png"
+	"math"
 	"time"
 
 	"bytes"
@@ -19,6 +20,7 @@ import (
 	"github.com/hajimehoshi/ebiten/v2/audio"
 	"github.com/hajimehoshi/ebiten/v2/audio/vorbis"
 	"github.com/hajimehoshi/ebiten/v2/audio/wav"
+	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
 	raudio "github.com/hajimehoshi/ebiten/v2/examples/resources/audio"
 	"github.com/hajimehoshi/ebiten/v2/examples/resources/fonts"
 	resources "github.com/hajimehoshi/ebiten/v2/examples/resources/images/flappy"
@@ -227,6 +229,15 @@ func (g *Game) Update() error {
 			g.mode = ModeGameOver
 			g.gameoverCount = 30
 		}
+	case ModeGameOver:
+		if g.gameoverCount > 0 {
+			g.gameoverCount--
+		}
+		if g.gameoverCount == 0 && g.jump() {
+			g.init()
+			g.mode = ModeTitle
+
+		}
 	}
 	return nil
 }
@@ -235,6 +246,7 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	screen.Fill(color.RGBA{0x80, 0xa0, 0xc0, 0xff})
 	g.drawTiles(screen)
 	if g.mode != ModeTitle {
+		g.drawGopher(screen)
 	}
 	var titleTexts []string
 	var texts []string
@@ -242,6 +254,8 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	case ModeTitle:
 		titleTexts = []string{"FLappy"}
 		texts = []string{"", "", "", "", "", "", "", "Press any key", "", "or touch screen"}
+	case ModeGameOver:
+		texts = []string{"", "GAME OVER!"}
 	}
 	for i, l := range titleTexts {
 		x := (screenWidth - len(l)*titleFontSize) / 2
@@ -251,6 +265,19 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		x := (screenWidth - len(l)*fontSize) / 2
 		text.Draw(screen, l, arcadeFont, x, (i+4)*fontSize, color.White)
 	}
+	if g.mode == ModeTitle {
+		msg := []string{
+			"Go Gopher by Renee French is",
+			"Licenced under CC BY 3.0",
+		}
+		for i, l := range msg {
+			x := (screenWidth - len(l)*smallFontSize) / 2
+			text.Draw(screen, l, smallArcadeFont, x, screenHeight-4+(i-1)*smallFontSize, color.White)
+		}
+	}
+	scoreStr := fmt.Sprintf("%04d", g.score())
+	text.Draw(screen, scoreStr, arcadeFont, screenWidth-len(scoreStr)*fontSize, fontSize, color.White)
+	ebitenutil.DebugPrint(screen, fmt.Sprintf("TPS: %02.f", ebiten.CurrentFPS))
 
 }
 
@@ -264,6 +291,13 @@ func (g *Game) pipeAt(tileX int) (tileY int, ok bool) {
 	idx := floorMod(tileX-pipeStartOffsetX, pipeIntervalX)
 	return g.pipeTileYs[idx%len(g.pipeTileYs)], true
 
+}
+func (g *Game) score() int {
+	x := floorDiv(g.x16, 16) / tileSize
+	if (x - pipeStartOffsetX) <= 0 {
+		return 0
+	}
+	return floorDiv(x-pipeStartOffsetX, pipeIntervalX)
 }
 func (g *Game) hit() bool {
 	if g.mode != ModeGame {
@@ -281,17 +315,20 @@ func (g *Game) hit() bool {
 	if y0 < -tileSize*4 {
 		return true
 	}
-	if y1 > -screenHeight-tileSize {
+	if y1 >= screenHeight-tileSize {
 		return true
 	}
 	xMin := floorDiv(x0-pipeWidth, tileSize)
-	xMax := floorDiv(x0*gopherWidth, tileSize)
+	xMax := floorDiv(x0+gopherWidth, tileSize)
 	for x := xMin; x <= xMax; x++ {
 		y, ok := g.pipeAt(x)
 		if !ok {
 			continue
 		}
-		if x1 >= x*tileSize+pipeWidth {
+		if x0 >= x*tileSize+pipeWidth {
+			continue
+		}
+		if x1 < x*tileSize {
 			continue
 		}
 		if y0 < y*tileSize {
@@ -329,7 +366,19 @@ func (g *Game) drawTiles(screen *ebiten.Image) {
 				if j == tileY-1 {
 					r = image.Rect(pipeTileSrcX, pipeTileSrcY, pipeTileSrcX+tileSize*2, pipeTileSrcY+tileSize)
 				} else {
-					r = image.Rect(pipeTileSrcX, pipeTileSrcY+tileSize, pipeTileSrcX+tileSize*2, pipeTileSrcY+tileSize)
+					r = image.Rect(pipeTileSrcX, pipeTileSrcY+tileSize, pipeTileSrcX+tileSize*2, pipeTileSrcY+tileSize*2)
+				}
+				screen.DrawImage(tilesImage.SubImage(r).(*ebiten.Image), op)
+			}
+			for j := tileY + pipeGapY; j < screenHeight/tileSize-1; j++ {
+				op.GeoM.Reset()
+				op.GeoM.Translate(float64(i*tileSize-floorMod(g.cameraX, tileSize)),
+					float64(j*tileSize-floorMod(g.cameraY, tileSize)))
+				var r image.Rectangle
+				if j == tileY+pipeGapY {
+					r = image.Rect(pipeTileSrcX, pipeTileSrcY, pipeTileSrcX+pipeWidth, pipeTileSrcY+tileSize)
+				} else {
+					r = image.Rect(pipeTileSrcX, pipeTileSrcY+tileSize, pipeTileSrcX+pipeWidth, pipeTileSrcY+tileSize+tileSize)
 				}
 				screen.DrawImage(tilesImage.SubImage(r).(*ebiten.Image), op)
 			}
@@ -344,6 +393,17 @@ func NewGame() *Game {
 	g := &Game{}
 	g.init()
 	return g
+}
+
+func (g *Game) drawGopher(screen *ebiten.Image) {
+	op := &ebiten.DrawImageOptions{}
+	w, h := gopherImage.Size()
+	op.GeoM.Translate(-float64(w)/2.0, -float64(h)/2.0)
+	op.GeoM.Rotate(float64(g.vy16) / 96.0 * math.Pi / 6)
+	op.GeoM.Translate(float64(w)/2.0, float64(h)/2.0)
+	op.GeoM.Translate(float64(g.x16/16.0)-float64(g.cameraX), float64(g.y16/16.0)-float64(g.cameraY))
+	op.Filter = ebiten.FilterLinear
+	screen.DrawImage(gopherImage, op)
 }
 
 func main() {
