@@ -2,10 +2,12 @@ package train
 
 import (
 	"bytes"
+	"fmt"
 	"image"
 	"log"
 
 	"github.com/hajimehoshi/ebiten/v2"
+	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
 	resources "github.com/kaepa3/game_train/train/resources"
 
@@ -75,6 +77,7 @@ func moveIfCan(x, y float64) {
 
 func (g *Game) Draw(screen *ebiten.Image) {
 	g.drawGopher(screen)
+	ebitenutil.DebugPrint(screen, fmt.Sprintf("TPS: %02.f", ebiten.CurrentFPS()))
 }
 
 func (g *Game) drawGopher(screen *ebiten.Image) {
